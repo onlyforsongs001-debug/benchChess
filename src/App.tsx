@@ -11,6 +11,7 @@ import {
   Tv,
   HelpCircle,
   ExternalLink,
+  Trophy,
 } from 'lucide-react';
 
 import type { ChessBot, GameMode, GameStatus, MoveRecord } from './types/chess';
@@ -19,8 +20,8 @@ import {
   calculateMaterial,
   getChessStateInfo,
   getDetailedLegalMoves,
-  executeBotScript,
 } from './utils/rules';
+import { runBotMove, disposeBotSession } from './utils/sandbox';
 
 import { ChessBoard, type BoardTheme } from './components/ChessBoard';
 import { PlayerCard } from './components/PlayerCard';
@@ -30,6 +31,7 @@ import { EvalBar } from './components/EvalBar';
 import { BotManagerModal } from './components/BotManagerModal';
 import { MatchStatsModal } from './components/MatchStatsModal';
 import { PromotionModal } from './components/PromotionModal';
+import { BenchmarkModal } from './components/BenchmarkModal';
 
 const STORAGE_KEY_BOTS = 'chess_arena_user_bots_v5';
 
@@ -101,6 +103,7 @@ export default function App() {
   // Modals
   const [isBotManagerOpen, setIsBotManagerOpen] = useState(false);
   const [isMatchStatsOpen, setIsMatchStatsOpen] = useState(false);
+  const [isBenchmarkOpen, setIsBenchmarkOpen] = useState(false);
 
   // Save bots to localStorage on update
   useEffect(() => {
@@ -352,6 +355,8 @@ export default function App() {
   };
 
   // Bot Turn Orchestration Loop
+  // Bot chạy trong Web Worker sandbox (timeout cứng, không kẹn UI) và giữ
+  // engine sống suốt ván để bảng transposition/killer/history được tái sử dụng.
   useEffect(() => {
     if (status !== 'playing') return;
 
@@ -367,26 +372,34 @@ export default function App() {
     if (!activeBot) return;
     setIsThinking(true);
 
+    let cancelled = false;
+
     const timer = setTimeout(() => {
-      const currentBoardFen = chess.fen();
-      const result = executeBotScript(activeBot.code, currentBoardFen, 2000);
+      void (async () => {
+        const currentBoardFen = chessRef.current.fen();
+        const result = await runBotMove(activeBot.id, activeBot.code, currentBoardFen, 2000);
 
-      setIsThinking(false);
+        if (cancelled) return;
+        setIsThinking(false);
 
-      if (result.success && result.move) {
-        applyMove(result.move, result.thinkingTimeMs);
-      } else {
-        console.warn(`Bot ${activeBot.name} returned error:`, result.error);
-        // Fallback: pick best capture or random legal move so game continues smoothly
-        const legal = getDetailedLegalMoves(chess);
-        if (legal.length > 0) {
-          const fallback = legal.find(m => m.captured) || legal[0];
-          applyMove({ from: fallback.from, to: fallback.to, promotion: fallback.promotion }, result.thinkingTimeMs || 10);
+        if (result.success && result.move) {
+          applyMove(result.move, result.thinkingTimeMs);
+        } else {
+          console.warn(`Bot ${activeBot.name} returned error:`, result.error);
+          // Fallback: pick best capture or random legal move so game continues smoothly
+          const legal = getDetailedLegalMoves(chessRef.current);
+          if (legal.length > 0) {
+            const fallback = legal.find(m => m.captured) || legal[0];
+            applyMove({ from: fallback.from, to: fallback.to, promotion: fallback.promotion }, result.thinkingTimeMs || 10);
+          }
         }
-      }
+      })();
     }, Math.max(80, speed));
 
-    return () => clearTimeout(timer);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
   }, [status, fen, speed, isWhiteHuman, isBlackHuman, whiteBot, blackBot, applyMove]);
 
   // Jump to specific move in history (Spectator review)
@@ -446,7 +459,16 @@ export default function App() {
       }
       if (e.code === 'Space') {
         e.preventDefault();
-        setStatus(s => (s === 'playing' ? 'paused' : 'playing'));
+        if (status === 'playing') {
+          setStatus('paused');
+        } else {
+          // Đang xem lại thế cờ cũ: phải nhảy về nước mới nhất trước khi chạy tiếp,
+          // nếu không bot sẽ đánh trên bàn đã tua và làm hỏng biên bản nước đi.
+          if (currentMoveIndex < moveSnapshots.length - 1) {
+            jumpToLatest();
+          }
+          setStatus('playing');
+        }
       } else if (e.code === 'ArrowLeft') {
         e.preventDefault();
         handleStepBack();
@@ -476,8 +498,22 @@ export default function App() {
 
   const handleDeleteBot = (botId: string) => {
     setBots(prev => prev.filter(b => b.id !== botId));
+    disposeBotSession(botId);
     if (whiteBotId === botId) setWhiteBotId(DEFAULT_BOTS[0].id);
     if (blackBotId === botId) setBlackBotId(DEFAULT_BOTS[1].id);
+  };
+
+  // Thêm bot mới từ giao diện (script do người dùng/AI soạn)
+  const handleAddBot = (bot: ChessBot) => {
+    setBots(prev => {
+      const idx = prev.findIndex(b => b.id === bot.id);
+      if (idx >= 0) {
+        const next = [...prev];
+        next[idx] = bot;
+        return next;
+      }
+      return [...prev, bot];
+    });
   };
 
   const handleResetToDefaults = () => {
@@ -514,6 +550,17 @@ export default function App() {
 
           {/* Quick Action Buttons */}
           <div className="flex items-center gap-2">
+            {/* Benchmark / Leaderboard */}
+            <button
+              type="button"
+              onClick={() => setIsBenchmarkOpen(true)}
+              title="Xem kết quả benchmark đo thật giữa các bot"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 font-bold text-xs border border-amber-500/30 transition cursor-pointer"
+            >
+              <Trophy className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Xếp Hạng</span>
+            </button>
+
             {/* Manage Bots */}
             <button
               type="button"
@@ -807,7 +854,11 @@ export default function App() {
         onSelectWhiteBot={id => setWhiteBotId(id)}
         onSelectBlackBot={id => setBlackBotId(id)}
         onDeleteBot={handleDeleteBot}
+        onAddBot={handleAddBot}
       />
+
+      {/* Benchmark / Leaderboard Modal */}
+      <BenchmarkModal isOpen={isBenchmarkOpen} onClose={() => setIsBenchmarkOpen(false)} />
 
       {/* Match Stats / Victory Modal */}
       <MatchStatsModal

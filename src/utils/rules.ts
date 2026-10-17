@@ -49,6 +49,27 @@ export function calculateMaterial(chess: Chess) {
     for (let i = 0; i < lostByWhite; i++) capturedByBlack.push(type);
   }
 
+  // Một tốt được phong cấp thành quân khác là KHÔNG phải quân bị bắt.
+  // Số quân dư ra so với quân số ban đầu chính là số lần phong cấp →
+  // loại bỏ tương ứng khỏi danh sách "quân bị bắt" (ưu tiên trừ tốt trước).
+  const stripPromotions = (list: string[], side: 'w' | 'b') => {
+    let promotions = 0;
+    for (const [type, count] of Object.entries(starting)) {
+      const cur = currentPieces[side + type] || 0;
+      if (cur > count) promotions += cur - count;
+    }
+    for (const type of ['p', 'n', 'b', 'r', 'q']) {
+      while (promotions > 0) {
+        const idx = list.lastIndexOf(type);
+        if (idx < 0) break;
+        list.splice(idx, 1);
+        promotions--;
+      }
+    }
+  };
+  stripPromotions(capturedByBlack, 'w'); // tốt trắng phong cấp không phải "bị đen bắt"
+  stripPromotions(capturedByWhite, 'b');
+
   return {
     whiteScore: Number(whiteScore.toFixed(2)),
     blackScore: Number(blackScore.toFixed(2)),
@@ -2383,7 +2404,7 @@ export const DEFAULT_BOTS: ChessBot[] = [
           }
           if (stopped) break;
           lastScore = bestScore;
-          if (Date.now() - T0 > tLimit * 0.45) break;
+          if (Date.now() - T0 > tLimit * 0.85) break;
           if (bestScore > MATE_MAX && depth >= 4) break;
         }
       }

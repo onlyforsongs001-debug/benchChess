@@ -4,6 +4,12 @@ import path from 'path';
 import {defineConfig} from 'vite';
 
 export default defineConfig(() => {
+  // Allow the sandbox/preview host to load the dev server.
+  // DEV_ALLOWED_HOSTS accepts a comma-separated list; defaults to allowing any host.
+  const allowedHosts: string[] | true = process.env.DEV_ALLOWED_HOSTS
+    ? process.env.DEV_ALLOWED_HOSTS.split(',').map(h => h.trim()).filter(Boolean)
+    : true;
+
   return {
     plugins: [react(), tailwindcss()],
     resolve: {
@@ -12,6 +18,7 @@ export default defineConfig(() => {
       },
     },
     server: {
+      allowedHosts,
       // HMR is disabled in AI Studio via DISABLE_HMR env var.
       // Do not modify—file watching is disabled to prevent flickering during agent edits.
       hmr: process.env.DISABLE_HMR !== 'true',
