@@ -1,0 +1,6 @@
+{
+  "name": "Chess Arena - AI Bot Battleground",
+  "description": "Môi trường thi đấu và quan sát cờ vua chuyên nghiệp với cơ chế nạp bot AI tùy chỉnh, prompt mẫu cho LLMs, và đấu trường AI vs AI.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
