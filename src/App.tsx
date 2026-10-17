@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Chess } from 'chess.js';
 import {
   Swords,
@@ -32,8 +32,11 @@ import { BotManagerModal } from './components/BotManagerModal';
 import { MatchStatsModal } from './components/MatchStatsModal';
 import { PromotionModal } from './components/PromotionModal';
 import { BenchmarkModal } from './components/BenchmarkModal';
+import { StockfishPanel } from './components/StockfishPanel';
+import { useStockfishAnalysis } from './hooks/useStockfish';
 
 const STORAGE_KEY_BOTS = 'chess_arena_user_bots_v5';
+const STORAGE_KEY_STOCKFISH = 'chess_arena_stockfish_enabled';
 
 export default function App() {
   // Load bots from localStorage or DEFAULT_BOTS (Gemini 3.8 Flash, DeepSeek V4.1 Flash, Claude Sonnet 5.5)
@@ -104,6 +107,44 @@ export default function App() {
   const [isBotManagerOpen, setIsBotManagerOpen] = useState(false);
   const [isMatchStatsOpen, setIsMatchStatsOpen] = useState(false);
   const [isBenchmarkOpen, setIsBenchmarkOpen] = useState(false);
+
+  // Stockfish: đánh giá thế cờ theo thời gian thực
+  const [stockfishEnabled, setStockfishEnabled] = useState<boolean>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY_STOCKFISH);
+      return saved === null ? true : saved === '1';
+    } catch {
+      return true;
+    }
+  });
+
+  // Khi đánh vs AI thì luôn bật đánh giá Stockfish
+  const isHumanVsBot = mode === 'human_vs_bot';
+  const stockfishActive = isHumanVsBot ? true : stockfishEnabled;
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_KEY_STOCKFISH, stockfishEnabled ? '1' : '0');
+    } catch (e) {
+      console.error(e);
+    }
+  }, [stockfishEnabled]);
+
+  // Thế trước nước đi vừa rồi + SAN của nước đi đó (để chấm điểm nước đi)
+  const prevFen = currentMoveIndex > 0 ? moveSnapshots[currentMoveIndex - 1] : null;
+  const lastMoveSan = useMemo(() => {
+    if (currentMoveIndex <= 0) return null;
+    const halfIdx = currentMoveIndex - 1;
+    const record = moveHistory[Math.floor(halfIdx / 2)];
+    if (!record) return null;
+    return halfIdx % 2 === 0 ? record.white?.san ?? null : record.black?.san ?? null;
+  }, [currentMoveIndex, moveHistory]);
+
+  const stockfish = useStockfishAnalysis(stockfishActive ? fen : null, stockfishActive, {
+    movetime: 700,
+    prevFen,
+    lastMoveSan,
+  });
 
   // Save bots to localStorage on update
   useEffect(() => {
@@ -819,6 +860,18 @@ export default function App() {
                 onSelectMove={halfMoveIdx => jumpToMoveIndex(halfMoveIdx + 1)}
               />
             </div>
+
+            {/* Stockfish – đánh giá thế cờ & nước đi theo thời gian thực */}
+            <StockfishPanel
+              fen={fen}
+              evalInfo={stockfish.evalInfo}
+              status={stockfish.status}
+              lastMove={stockfish.lastMove}
+              enabled={stockfishActive}
+              forced={isHumanVsBot}
+              perspective={isHumanVsBot ? 'w' : 'turn'}
+              onToggle={() => setStockfishEnabled(v => !v)}
+            />
 
             {/* Arena Info Card */}
             <div className="bg-slate-900/70 border border-slate-800 rounded-xl p-4 text-xs text-slate-300 space-y-2.5">
